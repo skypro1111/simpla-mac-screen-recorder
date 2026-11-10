@@ -28,6 +28,9 @@ struct RecordingOptions {
     var format: VideoFormat
     var codec: VideoCodec
     var fps: Int
+    /// Maximum video height in pixels (e.g. 1080); larger captures are scaled down
+    /// proportionally. 0 keeps the native resolution.
+    var maxHeight: Int
     var captureSystemAudio: Bool
     var captureMicrophone: Bool
     var outputDirectory: URL

@@ -8,7 +8,7 @@ final class AppSettings: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private enum Key {
-        static let format = "format", codec = "codec", fps = "fps"
+        static let format = "format", codec = "codec", fps = "fps", maxHeight = "maxHeight"
         static let systemAudio = "captureSystemAudio", microphone = "captureMicrophone"
         static let outputDirectory = "outputDirectory"
     }
@@ -20,6 +20,8 @@ final class AppSettings: ObservableObject {
     @Published var format: VideoFormat { didSet { defaults.set(format.rawValue, forKey: Key.format) } }
     @Published var codec: VideoCodec { didSet { defaults.set(codec.rawValue, forKey: Key.codec) } }
     @Published var fps: Int { didSet { defaults.set(fps, forKey: Key.fps) } }
+    /// Maximum video height in pixels; 0 = native resolution.
+    @Published var maxHeight: Int { didSet { defaults.set(maxHeight, forKey: Key.maxHeight) } }
     @Published var captureSystemAudio: Bool { didSet { defaults.set(captureSystemAudio, forKey: Key.systemAudio) } }
     @Published var captureMicrophone: Bool { didSet { defaults.set(captureMicrophone, forKey: Key.microphone) } }
     @Published var outputDirectory: URL { didSet { defaults.set(outputDirectory.path, forKey: Key.outputDirectory) } }
@@ -36,6 +38,7 @@ final class AppSettings: ObservableObject {
         codec = VideoCodec(rawValue: defaults.string(forKey: Key.codec) ?? "") ?? .h264
         let storedFPS = defaults.integer(forKey: Key.fps)
         fps = storedFPS > 0 ? storedFPS : 30
+        maxHeight = max(0, defaults.integer(forKey: Key.maxHeight))
         captureSystemAudio = defaults.bool(forKey: Key.systemAudio)
         captureMicrophone = defaults.bool(forKey: Key.microphone)
         if let path = defaults.string(forKey: Key.outputDirectory), !path.isEmpty {
@@ -46,7 +49,7 @@ final class AppSettings: ObservableObject {
     }
 
     var recordingOptions: RecordingOptions {
-        RecordingOptions(format: format, codec: codec, fps: fps,
+        RecordingOptions(format: format, codec: codec, fps: fps, maxHeight: maxHeight,
                          captureSystemAudio: captureSystemAudio,
                          captureMicrophone: captureMicrophone,
                          outputDirectory: outputDirectory)
@@ -66,6 +69,16 @@ struct SettingsView: View {
                 Text("H.264").tag(VideoCodec.h264)
                 Text("HEVC").tag(VideoCodec.hevc)
             }
+            Picker("Quality", selection: $settings.maxHeight) {
+                Text("Original").tag(0)
+                Text("4K (2160p)").tag(2160)
+                Text("1440p").tag(1440)
+                Text("1080p").tag(1080)
+                Text("720p").tag(720)
+                Text("480p").tag(480)
+                Text("360p").tag(360)
+            }
+            .help("Recordings larger than this are scaled down. Smaller ones are never enlarged.")
             Picker("Frame Rate", selection: $settings.fps) {
                 ForEach([15, 24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
             }

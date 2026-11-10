@@ -80,8 +80,14 @@ final class Recorder: NSObject, ObservableObject {
         let scale = CGFloat(filter.pointPixelScale)
 
         let config = SCStreamConfiguration()
-        config.width = Self.even(pointSize.width * scale)
-        config.height = Self.even(pointSize.height * scale)
+        // Native pixel size, scaled down (never up) to the chosen maximum height.
+        var pixelSize = CGSize(width: pointSize.width * scale, height: pointSize.height * scale)
+        if options.maxHeight > 0, pixelSize.height > CGFloat(options.maxHeight) {
+            let factor = CGFloat(options.maxHeight) / pixelSize.height
+            pixelSize = CGSize(width: pixelSize.width * factor, height: CGFloat(options.maxHeight))
+        }
+        config.width = Self.even(pixelSize.width)
+        config.height = Self.even(pixelSize.height)
         if let sourceRect { config.sourceRect = sourceRect }
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, options.fps)))
         config.showsCursor = true
