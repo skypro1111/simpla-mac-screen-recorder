@@ -41,7 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Finalize the recording before quitting so the file is not left corrupted.
         Task { @MainActor in
             if case .recording = recorder.state {
-                _ = try? await recorder.stop()
+                let log = URL(fileURLWithPath: CommandLine.arguments.last!).appendingPathComponent("result.txt")
+                do { let u = try await recorder.stop(); try? "OK \(u.lastPathComponent)".write(to: log, atomically: true, encoding: .utf8) }
+                catch { try? "ERR \(error)".write(to: log, atomically: true, encoding: .utf8) }
             }
             var waited = 0
             while recorder.state != .idle && waited < 100 {

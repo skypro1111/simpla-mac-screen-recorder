@@ -324,6 +324,9 @@ private final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     init(url: URL, fileType: AVFileType, codec: VideoCodec, width: Int, height: Int, fps: Int,
          systemAudio: Bool, microphone: Bool) throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
+        // Flush the recording to disk in fragments, so a crash or power loss costs at most
+        // the last few seconds instead of leaving an unplayable file.
+        writer.movieFragmentInterval = CMTime(seconds: 5, preferredTimescale: 600)
         self.writer = writer
 
         // Screen content compresses well; HEVC needs roughly 60% of the H.264 bitrate.
