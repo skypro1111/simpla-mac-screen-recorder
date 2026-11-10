@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 /// User preferences, persisted in UserDefaults.
@@ -58,6 +59,9 @@ final class AppSettings: ObservableObject {
 
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
+    /// Mirrors the system's login-item state (the system, not UserDefaults, is the source of truth).
+    @State private var startAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var loginItemError: String?
 
     var body: some View {
         Form {
@@ -84,6 +88,10 @@ struct SettingsView: View {
             }
             Toggle("Record microphone by default", isOn: $settings.captureMicrophone)
             Toggle("Record system audio by default", isOn: $settings.captureSystemAudio)
+            Toggle("Start at login", isOn: Binding(get: { startAtLogin }, set: setStartAtLogin))
+            if let loginItemError {
+                Text(loginItemError).font(.caption).foregroundStyle(.red)
+            }
             LabeledContent("Save to") {
                 HStack {
                     Text((settings.outputDirectory.path as NSString).abbreviatingWithTildeInPath)
@@ -97,6 +105,20 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 380)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func setStartAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            loginItemError = nil
+        } catch {
+            loginItemError = error.localizedDescription
+        }
+        startAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     private func chooseFolder() {

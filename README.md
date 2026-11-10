@@ -34,6 +34,6 @@ The microphone is requested separately. With ad-hoc signing you may have to gran
 
 ## Settings
 
-**Settings…**: format, codec, quality (maximum resolution, from 360p to original), frame rate, default microphone / system audio, and the output folder
+**Settings…**: format, codec, quality (maximum resolution, from 360p to original), frame rate, default microphone / system audio, start at login, and the output folder
 (default `~/Movies/Simpla Recorder`). Stored in `UserDefaults` (`com.simpla.recorder`).
 Recordings are named `Screen Recording yyyy-MM-dd HH.mm.ss`.
