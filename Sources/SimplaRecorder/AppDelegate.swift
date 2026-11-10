@@ -20,7 +20,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.target = self
-        statusItem.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         menu.delegate = self
 
         // `$state` emits in willSet, so use the delivered value rather than reading `state`.
@@ -72,21 +71,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.action = nil
             statusItem.menu = menu
         case .recording(let since):
-            let stop = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop Recording")?
-                .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
-            stop?.isTemplate = true
-            button.image = stop
-            button.title = " " + Self.elapsed(since: since)
+            button.title = ""
+            button.image = Self.recordingImage(since: since)
             button.toolTip = "Stop Recording"
             statusItem.menu = nil
             button.action = #selector(stopRecording)
             timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.statusItem.button?.title = " " + Self.elapsed(since: since)
+                    self?.statusItem.button?.image = Self.recordingImage(since: since)
                 }
             }
         }
     }
+
+    /// Stop glyph + elapsed time drawn into one template image, so both are vertically
+    /// centred on the same line and take the menu bar's own colour.
+    private static func recordingImage(since: Date) -> NSImage {
+        let text = NSAttributedString(string: elapsed(since: since), attributes: [
+            .font: timerFont,
+            .foregroundColor: NSColor.black,
+        ])
+        let icon = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
+        let iconSize = icon?.size ?? .zero
+        let gap: CGFloat = 5
+        let size = NSSize(width: ceil(iconSize.width + gap + text.size().width), height: 18)
+        let image = NSImage(size: size, flipped: false) { _ in
+            icon?.draw(in: NSRect(x: 0, y: (size.height - iconSize.height) / 2,
+                                  width: iconSize.width, height: iconSize.height))
+            // Centre the digits (cap height) on the image's middle line.
+            let baseline = (size.height - timerFont.capHeight) / 2
+            text.draw(at: NSPoint(x: iconSize.width + gap, y: baseline + timerFont.descender))
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Stop Recording"
+        return image
+    }
+
+    private static let timerFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
 
     /// Bundled camera glyph as a template image, so it follows the menu bar colour.
     /// Falls back to an SF Symbol outside a bundle.
