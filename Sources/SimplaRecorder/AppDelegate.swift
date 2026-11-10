@@ -30,7 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
 
         recorder.onUnexpectedStop = { [weak self] url, error in
-            if let error { self?.showError(error) }
+            // Stopping from the system's own recording indicator in the menu bar is a normal stop.
+            if let error, !Self.isUserStop(error) { self?.showError(error) }
             if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
         }
     }
@@ -88,10 +89,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Explicitly coloured (non-template) symbol, so it stays visible on any menu bar.
+    /// Explicitly coloured (non-template) symbol — white glyph on a coloured disc — so it
+    /// stays visible on any menu bar.
     private static func symbol(_ name: String, color: NSColor) -> NSImage? {
         let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-            .applying(.init(paletteColors: [color]))
+            .applying(.init(paletteColors: [.white, color]))
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
         image?.isTemplate = false
         return image
@@ -217,6 +219,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.addButton(withTitle: "OK")
             alert.runModal()
         }
+    }
+
+    private static func isUserStop(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == SCStreamErrorDomain && error.code == SCStreamError.Code.userStopped.rawValue
     }
 
     private static func isPermissionDenied(_ error: Error) -> Bool {
