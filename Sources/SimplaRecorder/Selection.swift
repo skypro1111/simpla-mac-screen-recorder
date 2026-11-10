@@ -202,7 +202,7 @@ private final class PickerSession: NSObject {
     private func positionHUD() {
         guard let hud, let window = chosenWindow, let frame = chosen?.frame else { return }
         let view = window.overlay
-        let size = hud.fittingSize
+        let size = hud.frame.size
         let region = frame.offsetBy(dx: -window.frame.minX, dy: -window.frame.minY).intersection(view.bounds)
         let margin: CGFloat = 12
         var origin = NSPoint(x: region.midX - size.width / 2, y: region.midY - size.height / 2)
@@ -228,73 +228,49 @@ private final class PickerSession: NSObject {
     }
 
     private func makeHUD() -> HUDView {
-        let mic = ToggleButton(on: "mic.fill", off: "mic.slash.fill", tooltip: "Microphone", isOn: microphone,
-                               target: self, action: #selector(toggleMicrophone(_:)))
-        let audio = ToggleButton(on: "speaker.wave.2.fill", off: "speaker.slash.fill", tooltip: "System Audio",
-                                 isOn: systemAudio, target: self, action: #selector(toggleSystemAudio(_:)))
+        let mic = HUDButton(symbol: "mic.fill", offSymbol: "mic.slash.fill", tooltip: "Microphone")
+        mic.isOn = microphone
+        mic.onClick = { [weak self, weak mic] in
+            guard let self else { return }
+            self.microphone.toggle()
+            mic?.isOn = self.microphone
+        }
+        let audio = HUDButton(symbol: "speaker.wave.2.fill", offSymbol: "speaker.slash.fill", tooltip: "System Audio")
+        audio.isOn = systemAudio
+        audio.onClick = { [weak self, weak audio] in
+            guard let self else { return }
+            self.systemAudio.toggle()
+            audio?.isOn = self.systemAudio
+        }
+        let start = HUDButton(symbol: "record.circle", title: "Start Recording", tooltip: "Start Recording (Return)")
+        start.onClick = { [weak self] in self?.startRecording() }
+        let close = HUDButton(symbol: "xmark", tooltip: "Cancel", filled: false)
+        close.onClick = { [weak self] in self?.finish(nil) }
 
-        // Grey pill button: record glyph + title. Return triggers it.
-        let start = NSButton(title: "", target: self, action: #selector(startRecording))
-        start.isBordered = false
-        start.attributedTitle = NSAttributedString(string: " Start Recording", attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: HUDColor.icon,
-        ])
-        start.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 15, weight: .semibold))
-        start.imagePosition = .imageLeading
-        start.contentTintColor = HUDColor.icon
-        start.wantsLayer = true
-        start.layer?.backgroundColor = HUDColor.fill.cgColor
-        start.layer?.cornerRadius = 17
-        start.keyEquivalent = "\r"
-        start.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            start.heightAnchor.constraint(equalToConstant: 34),
-            start.widthAnchor.constraint(equalToConstant: start.intrinsicContentSize.width + 28),
-        ])
-
-        let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Cancel") ?? NSImage(),
-                             target: self, action: #selector(cancelPressed))
-        close.isBordered = false
-        close.contentTintColor = NSColor.white.withAlphaComponent(0.6)
-        close.toolTip = "Cancel"
-
-        let stack = NSStackView(views: [mic, audio, start, close])
-        stack.orientation = .horizontal
-        stack.spacing = 10
-        stack.alignment = .centerY
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
+        // Fixed manual layout: one row, vertically centred.
         let hud = HUDView()
         hud.session = self
-        hud.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: hud.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: hud.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: hud.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: hud.bottomAnchor),
-        ])
+        let padX: CGFloat = 12, padY: CGFloat = 10, spacing: CGFloat = 8
+        var x = padX
+        for button in [mic, audio, start, close] {
+            let size = button.intrinsicContentSize
+            button.frame = NSRect(x: x, y: padY, width: size.width, height: size.height)
+            hud.addSubview(button)
+            x += size.width + spacing
+        }
+        hud.setFrameSize(NSSize(width: x - spacing + padX, height: HUDButton.height + 2 * padY))
         return hud
     }
 
-    @objc private func toggleMicrophone(_ sender: ToggleButton) {
-        microphone.toggle()
-        sender.isOn = microphone
+    /// Return key in phase 2.
+    func confirmPressed() {
+        if isConfirming { startRecording() }
     }
 
-    @objc private func toggleSystemAudio(_ sender: ToggleButton) {
-        systemAudio.toggle()
-        sender.isOn = systemAudio
-    }
-
-    @objc private func startRecording() {
+    private func startRecording() {
         guard let chosen else { return }
         finish(CaptureChoice(target: chosen.target, microphone: microphone, systemAudio: systemAudio))
     }
-
-    @objc private func cancelPressed() { finish(nil) }
 
     // MARK: Drawing state
 
@@ -559,7 +535,11 @@ private final class OverlayView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { session?.cancel() } else { super.keyDown(with: event) }  // 53 = Esc
+        switch event.keyCode {
+        case 53: session?.cancel()                  // Esc
+        case 36, 76: session?.confirmPressed()      // Return / Enter
+        default: super.keyDown(with: event)
+        }
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -646,43 +626,89 @@ private enum HUDColor {
     static let iconOff = NSColor(white: 0.55, alpha: 1)
     static let fill = NSColor(white: 1, alpha: 0.14)
     static let fillOff = NSColor(white: 1, alpha: 0.06)
+    static let fillPressed = NSColor(white: 1, alpha: 0.24)
 }
 
-/// Round grey icon button; crossed out when off.
+/// Self-drawn grey pill button: an SF Symbol, optionally followed by a title.
+/// With an `offSymbol` it acts as a toggle that shows the crossed-out glyph when off.
 @MainActor
-private final class ToggleButton: NSButton {
-    private let onSymbol: String
-    private let offSymbol: String
-    var isOn: Bool { didSet { update() } }
+private final class HUDButton: NSView {
+    static let height: CGFloat = 34
 
-    init(on: String, off: String, tooltip: String, isOn: Bool, target: AnyObject, action: Selector) {
-        onSymbol = on
-        offSymbol = off
-        self.isOn = isOn
-        super.init(frame: NSRect(x: 0, y: 0, width: 34, height: 34))
-        self.target = target
-        self.action = action
+    var isOn = true { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
+
+    private let symbol: String
+    private let offSymbol: String?
+    private let title: NSAttributedString?
+    private let filled: Bool
+    private var pressed = false { didSet { needsDisplay = true } }
+
+    init(symbol: String, offSymbol: String? = nil, title: String? = nil, tooltip: String, filled: Bool = true) {
+        self.symbol = symbol
+        self.offSymbol = offSymbol
+        self.filled = filled
+        self.title = title.map {
+            NSAttributedString(string: $0, attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .foregroundColor: HUDColor.icon,
+            ])
+        }
+        super.init(frame: .zero)
         toolTip = tooltip
-        isBordered = false
-        imagePosition = .imageOnly
-        wantsLayer = true
-        layer?.cornerRadius = 17
-        translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 34),
-            heightAnchor.constraint(equalToConstant: 34),
-        ])
-        update()
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title ?? tooltip)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    private func update() {
-        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
-        image = NSImage(systemSymbolName: isOn ? onSymbol : offSymbol, accessibilityDescription: toolTip)?
+    private var icon: NSImage? {
+        let active = isOn || offSymbol == nil
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+            .applying(.init(paletteColors: [active ? HUDColor.icon : HUDColor.iconOff]))
+        return NSImage(systemSymbolName: active ? symbol : (offSymbol ?? symbol), accessibilityDescription: nil)?
             .withSymbolConfiguration(config)
-        // Grey in both states; the "off" symbol is the crossed-out variant.
-        contentTintColor = isOn ? HUDColor.icon : HUDColor.iconOff
-        layer?.backgroundColor = (isOn ? HUDColor.fill : HUDColor.fillOff).cgColor
+    }
+
+    private static let iconSlot: CGFloat = 20   // fixed, so toggling symbols never shifts the layout
+    private static let gap: CGFloat = 6
+    private static let titlePadding: CGFloat = 14
+
+    override var intrinsicContentSize: NSSize {
+        guard let title else { return NSSize(width: filled ? Self.height : 24, height: Self.height) }
+        let width = 2 * Self.titlePadding + Self.iconSlot + Self.gap + ceil(title.size().width)
+        return NSSize(width: width, height: Self.height)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if filled {
+            let active = isOn || offSymbol == nil
+            (pressed ? HUDColor.fillPressed : (active ? HUDColor.fill : HUDColor.fillOff)).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+        }
+        // Icon centred in its slot; the slot is centred in icon-only buttons.
+        let slotX = title == nil ? (bounds.width - Self.iconSlot) / 2 : Self.titlePadding
+        if let icon {
+            let size = icon.size
+            icon.draw(in: NSRect(x: slotX + (Self.iconSlot - size.width) / 2, y: (bounds.height - size.height) / 2,
+                                 width: size.width, height: size.height),
+                      from: .zero, operation: .sourceOver, fraction: pressed && !filled ? 0.6 : 1)
+        }
+        if let title {
+            let size = title.size()
+            title.draw(at: NSPoint(x: slotX + Self.iconSlot + Self.gap, y: (bounds.height - size.height) / 2))
+        }
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { pressed = true }
+    override func mouseDragged(with event: NSEvent) {
+        pressed = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+    override func mouseUp(with event: NSEvent) {
+        let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+        pressed = false
+        if inside { onClick?() }
     }
 }
