@@ -7,6 +7,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let recorder = Recorder.shared
     private var statusItem: NSStatusItem!
+    private let menu = NSMenu()
     private var stateObserver: AnyCancellable?
     private var timer: Timer?
     private var settingsWindow: NSWindow?
@@ -18,11 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageLeading
-        statusItem.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-
-        let menu = NSMenu()
+        statusItem.button?.target = self
         menu.delegate = self
-        statusItem.menu = menu
 
         // `$state` emits in willSet, so use the delivered value rather than reading `state`.
         stateObserver = recorder.$state
@@ -56,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Status item
 
+    /// Idle: camera icon that opens the menu. Recording: the item itself is a red stop
+    /// button with the elapsed time; one click stops the recording (no menu).
     private func updateStatusItem(for state: Recorder.State) {
         guard let button = statusItem.button else { return }
         timer?.invalidate()
@@ -64,26 +64,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch state {
         case .idle:
             button.image = statusIcon()
-            button.contentTintColor = nil
-            button.title = ""
+            button.attributedTitle = NSAttributedString()
+            button.toolTip = "Simpla Recorder"
+            button.action = nil
+            statusItem.menu = menu
         case .recording(let since):
-            button.image = statusIcon()
-            button.contentTintColor = .systemRed
-            button.title = " " + Self.elapsed(since: since)
+            button.image = Self.symbol("stop.circle.fill", color: .systemRed)
+            button.attributedTitle = Self.label(Self.elapsed(since: since), color: .systemRed)
+            button.toolTip = "Stop Recording"
+            statusItem.menu = nil
+            button.action = #selector(stopRecording)
             timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.statusItem.button?.title = " " + Self.elapsed(since: since)
+                    self?.statusItem.button?.attributedTitle = Self.label(Self.elapsed(since: since), color: .systemRed)
                 }
             }
         case .finishing:
-            button.image = statusIcon()
-            button.contentTintColor = .systemOrange
-            button.title = ""
+            button.image = Self.symbol("arrow.down.circle.fill", color: .systemOrange)
+            button.attributedTitle = Self.label("Saving…", color: .systemOrange)
+            button.toolTip = "Saving…"
+            statusItem.menu = nil
+            button.action = nil
         }
     }
 
-    /// Bundled camera glyph as a template image, so it follows the menu bar colour
-    /// (and can be tinted while recording). Falls back to an SF Symbol outside a bundle.
+    /// Explicitly coloured (non-template) symbol, so it stays visible on any menu bar.
+    private static func symbol(_ name: String, color: NSColor) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+            .applying(.init(paletteColors: [color]))
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
+        image?.isTemplate = false
+        return image
+    }
+
+    private static func label(_ text: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: " " + text, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+            .foregroundColor: color,
+        ])
+    }
+
+    /// Bundled camera glyph as a template image, so it follows the menu bar colour.
+    /// Falls back to an SF Symbol outside a bundle.
     private func statusIcon() -> NSImage? {
         let image = Bundle.main.image(forResource: "StatusIcon")
             ?? NSImage(systemSymbolName: "video", accessibilityDescription: nil)
@@ -101,17 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        switch recorder.state {
-        case .idle:
-            menu.addItem(item("Record Screen", #selector(recordScreen)))
-            menu.addItem(item("Settings…", #selector(openSettings), key: ","))
-        case .recording:
-            menu.addItem(item("Stop Recording", #selector(stopRecording)))
-        case .finishing:
-            let saving = NSMenuItem(title: "Saving…", action: nil, keyEquivalent: "")
-            saving.isEnabled = false
-            menu.addItem(saving)
-        }
+        // Only shown while idle: during a recording the status item is the stop button.
+        menu.addItem(item("Record Screen", #selector(recordScreen)))
+        menu.addItem(item("Settings…", #selector(openSettings), key: ","))
         menu.addItem(item("Open Recordings Folder", #selector(openRecordingsFolder)))
         menu.addItem(.separator())
         menu.addItem(item("Quit", #selector(quit), key: "q"))
@@ -147,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func stopRecording() {
+        guard case .recording = recorder.state else { return }
         Task { @MainActor in
             do {
                 let url = try await recorder.stop()

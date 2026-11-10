@@ -10,8 +10,8 @@ The menu-bar icon has four items: **Record Screen**, **Settings…**, **Open Rec
 1. **Record Screen** dims the screens. Click a window to pick it, press **Entire Screen**, or drag to select an area
    (a dragged area can then be resized by its borders and moved by dragging the panel).
 2. A small panel lets you turn the microphone and system audio on or off for this recording, then start it.
-3. While recording, the icon turns red and shows the elapsed time. Choose **Stop Recording** to finish;
-   the file is revealed in Finder. Quitting during a recording saves it first.
+3. While recording, the menu-bar item becomes a red stop button with the elapsed time.
+   Click it to stop; the file is revealed in Finder.
 
 ## Build
 
