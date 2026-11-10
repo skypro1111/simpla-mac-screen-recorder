@@ -65,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         switch state {
         case .idle, .finishing:
+            RecordingDim.shared.hide()
             button.image = statusIcon()
             button.title = ""
             button.toolTip = "Simpla Recorder"
@@ -162,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             options.captureSystemAudio = choice.systemAudio
             do {
                 try await recorder.start(target: choice.target, options: options)
+                RecordingDim.shared.show(target: choice.target, frame: choice.frame)
             } catch {
                 showError(error)
             }

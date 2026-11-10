@@ -56,6 +56,8 @@ final class Recorder: NSObject, ObservableObject {
 
         // Resolve the content filter and the capture size in points.
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        // Our own windows (dim overlay, preview) never belong in a recording.
+        let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
         let filter: SCContentFilter
         var sourceRect: CGRect?
         switch target {
@@ -63,7 +65,7 @@ final class Recorder: NSObject, ObservableObject {
             guard let display = content.displays.first(where: { $0.displayID == id }) else {
                 throw RecorderError.displayNotFound
             }
-            filter = SCContentFilter(display: display, excludingWindows: [])
+            filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
         case .window(let id):
             guard let window = content.windows.first(where: { $0.windowID == id }) else {
                 throw RecorderError.windowNotFound
@@ -73,7 +75,7 @@ final class Recorder: NSObject, ObservableObject {
             guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
                 throw RecorderError.displayNotFound
             }
-            filter = SCContentFilter(display: display, excludingWindows: [])
+            filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
             sourceRect = rect.standardized
         }
         let pointSize = sourceRect?.size ?? filter.contentRect.size
@@ -316,6 +318,8 @@ private final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     private let microphone: AVAssetWriterInput?
     private var started = false
     private var finished = false
+    /// Last appended video frame, repeated at the end so a static screen keeps its real duration.
+    private var lastFrame: CMSampleBuffer?
 
     init(url: URL, fileType: AVFileType, codec: VideoCodec, width: Int, height: Int, fps: Int,
          systemAudio: Bool, microphone: Bool) throws {
@@ -370,7 +374,7 @@ private final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable 
                 writer.startSession(atSourceTime: sampleBuffer.presentationTimeStamp)
                 started = true
             }
-            if video.isReadyForMoreMediaData { video.append(sampleBuffer) }
+            if video.isReadyForMoreMediaData, video.append(sampleBuffer) { lastFrame = sampleBuffer }
         case .audio:
             if started, let audio, audio.isReadyForMoreMediaData { audio.append(sampleBuffer) }
         case .microphone:
@@ -391,8 +395,18 @@ private final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable 
                     continuation.resume(throwing: error ?? RecorderError.recordingFailed("No frames were captured."))
                     return
                 }
-                // A static screen produces no new frames; extend the last one to the real end time.
-                self.writer.endSession(atSourceTime: CMClockGetTime(CMClockGetHostTimeClock()))
+                // A static screen produces no new frames, so the video would end at the last change.
+                // Repeat the last frame at the real end time to keep the full duration.
+                let now = CMClockGetTime(CMClockGetHostTimeClock())
+                if let last = self.lastFrame, now > last.presentationTimeStamp, self.video.isReadyForMoreMediaData {
+                    var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: now, decodeTimeStamp: .invalid)
+                    var copy: CMSampleBuffer?
+                    CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: last, sampleTimingEntryCount: 1,
+                                                          sampleTimingArray: &timing, sampleBufferOut: &copy)
+                    if let copy { self.video.append(copy) }
+                }
+                self.lastFrame = nil
+                self.writer.endSession(atSourceTime: now)
                 for input in [self.video, self.audio, self.microphone] { input?.markAsFinished() }
                 self.writer.finishWriting {
                     if self.writer.status == .completed {

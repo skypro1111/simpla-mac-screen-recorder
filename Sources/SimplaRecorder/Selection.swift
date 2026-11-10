@@ -281,7 +281,7 @@ private final class PickerSession: NSObject {
 
     private func startRecording() {
         guard let chosen else { return }
-        finish(CaptureChoice(target: chosen.target, microphone: microphone, systemAudio: systemAudio))
+        finish(CaptureChoice(target: chosen.target, frame: chosen.frame, microphone: microphone, systemAudio: systemAudio))
     }
 
     // MARK: Drawing state

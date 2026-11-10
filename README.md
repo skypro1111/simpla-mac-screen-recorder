@@ -26,7 +26,7 @@ The menu-bar icon has four items: **Record Screen**, **Settings…**, **Open Rec
    (a dragged area can then be resized by its borders or corners and moved by dragging inside it).
 2. A small panel lets you turn the microphone and system audio on or off for this recording, then start it.
 3. While recording, the menu-bar item becomes a stop button with the elapsed time.
-   Click it to stop.
+   Everything outside the recorded region is slightly dimmed. Click the stop button to finish.
 4. A small preview appears in the bottom-left corner for 5 seconds. Hover it for **Save** (show in Finder),
    **Copy** (put the video on the clipboard) or **Delete** (move to Trash); otherwise it fades out and the file stays saved.
 

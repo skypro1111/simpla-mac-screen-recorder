@@ -39,6 +39,8 @@ struct RecordingOptions {
 /// Result of the capture picker: what to record and with which audio sources.
 struct CaptureChoice {
     var target: CaptureTarget
+    /// The chosen region in AppKit global coordinates (bottom-left origin).
+    var frame: CGRect
     var microphone: Bool
     var systemAudio: Bool
 }
