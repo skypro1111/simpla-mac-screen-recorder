@@ -157,7 +157,7 @@ private final class PreviewView: NSView {
     var onDelete: (() -> Void)?
 
     /// Greyscale, darkened copy of the frame, faded in on hover.
-    private let dimLayer = CALayer()
+    private let dimView = NSView()
     private let buttons = NSView()
     private let message = NSTextField(labelWithString: "")
 
@@ -172,12 +172,14 @@ private final class PreviewView: NSView {
         layer?.contentsGravity = .resizeAspectFill
         layer?.contents = image
 
-        dimLayer.frame = bounds
-        dimLayer.contentsGravity = .resizeAspectFill
-        dimLayer.backgroundColor = NSColor(white: 0.1, alpha: 1).cgColor
-        dimLayer.contents = image.flatMap(Self.dimmed)
-        dimLayer.opacity = 0
-        layer?.addSublayer(dimLayer)
+        // A real subview (not a bare sublayer) so AppKit keeps it above the frame and below the buttons.
+        dimView.frame = bounds
+        dimView.wantsLayer = true
+        dimView.layer?.contentsGravity = .resizeAspectFill
+        dimView.layer?.backgroundColor = NSColor(white: 0.16, alpha: 1).cgColor
+        dimView.layer?.contents = image.flatMap(Self.dimmed)
+        dimView.alphaValue = 0
+        addSubview(dimView)
 
         // Three buttons in a centred row (fixed manual layout).
         let specs: [(String, String, Selector)] = [
@@ -213,18 +215,21 @@ private final class PreviewView: NSView {
     private static func dimmed(_ image: CGImage) -> CGImage? {
         let output = CIImage(cgImage: image).applyingFilter("CIColorControls", parameters: [
             kCIInputSaturationKey: 0,
-        ]).applyingFilter("CIColorMatrix", parameters: [   // darken to 45%
-            "inputRVector": CIVector(x: 0.45, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: 0.45, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: 0.45, w: 0),
+        ]).applyingFilter("CIColorMatrix", parameters: [
+            // Compress everything into a dark grey band so the change is obvious on dark and
+            // bright frames alike. Values are in linear light: black -> ~20% grey, white -> ~42%.
+            "inputRVector": CIVector(x: 0.12, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0.12, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0.12, w: 0),
+            "inputBiasVector": CIVector(x: 0.03, y: 0.03, z: 0.03, w: 0),
         ])
         return CIContext().createCGImage(output, from: output.extent)
     }
 
     func setHovering(_ hovering: Bool) {
-        dimLayer.opacity = hovering || !message.isHidden ? 1 : 0
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
+            dimView.animator().alphaValue = hovering || !message.isHidden ? 1 : 0
             buttons.animator().alphaValue = hovering && message.isHidden ? 1 : 0
         }
     }
@@ -234,7 +239,7 @@ private final class PreviewView: NSView {
         message.stringValue = text
         message.isHidden = false
         buttons.isHidden = true
-        dimLayer.opacity = 1
+        dimView.alphaValue = 1
     }
 
     override func mouseEntered(with event: NSEvent) {
