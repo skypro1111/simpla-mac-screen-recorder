@@ -29,7 +29,8 @@ enum CapturePicker {
 
 @MainActor
 private final class PickerSession: NSObject {
-    private typealias WindowEntry = (id: CGWindowID, frame: NSRect)
+    /// `display` is set for a full-screen window: picking it records that whole display.
+    private typealias WindowEntry = (id: CGWindowID, pid: pid_t, frame: NSRect, display: CGDirectDisplayID?)
 
     private var continuation: CheckedContinuation<CaptureChoice?, Never>?
     private var microphone: Bool
@@ -169,7 +170,12 @@ private final class PickerSession: NSObject {
             Self.area(a.frame.intersection(hovered.frame)) < Self.area(b.frame.intersection(hovered.frame))
         }
         guard let best else { return }
-        confirm(.window(hovered.id), frame: hovered.frame, on: best)
+        if let display = hovered.display {
+            // A full-screen app is made of several windows (content, toolbar); record the display instead.
+            confirm(.display(display), frame: hovered.frame, on: best)
+        } else {
+            confirm(.window(hovered.id), frame: hovered.frame, on: best)
+        }
     }
 
     func selectDisplay(_ window: OverlayWindow) {
@@ -317,7 +323,7 @@ private final class PickerSession: NSObject {
                 as? [[String: Any]] else { return [] }
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return infos.compactMap { info in
+        var entries: [WindowEntry] = infos.compactMap { info in
             guard (info[kCGWindowLayer as String] as? Int) == 0,
                   let id = info[kCGWindowNumber as String] as? CGWindowID,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
@@ -326,8 +332,29 @@ private final class PickerSession: NSObject {
                   let b = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
                   b.width >= 60, b.height >= 60
             else { return nil }
-            return (id, NSRect(x: b.minX, y: primaryHeight - b.maxY, width: b.width, height: b.height))
+            return (id, pid, NSRect(x: b.minX, y: primaryHeight - b.maxY, width: b.width, height: b.height), nil)
         }
+
+        // Full-screen windows: treat the window as its whole screen and drop the app's helper
+        // windows on it (e.g. the separate toolbar strip), so the screen is one zone, not two.
+        for index in entries.indices {
+            let frame = entries[index].frame
+            guard let screen = NSScreen.screens.first(where: { screen in
+                // The window must cover the screen completely (on a notched display: everything
+                // below the notch). A merely maximized window stops at the menu bar and doesn't count.
+                var usable = screen.frame
+                usable.size.height -= screen.safeAreaInsets.top
+                return frame.insetBy(dx: -1, dy: -1).contains(usable)
+            }), let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            else { continue }
+            entries[index].frame = screen.frame
+            entries[index].display = CGDirectDisplayID(number.uint32Value)
+        }
+        let fullScreen = entries.filter { $0.display != nil }
+        entries.removeAll { entry in
+            entry.display == nil && fullScreen.contains { $0.pid == entry.pid && $0.frame.contains(entry.frame) }
+        }
+        return entries
     }
 }
 
