@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recorder.onUnexpectedStop = { [weak self] url, error in
             // Stopping from the system's own recording indicator in the menu bar is a normal stop.
             if let error, !Self.isUserStop(error) { self?.showError(error) }
-            if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            if let url { RecordingPreview.show(url: url) }
         }
     }
 
@@ -167,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             do {
                 let url = try await recorder.stop()
-                NSWorkspace.shared.activateFileViewerSelecting([url])
+                RecordingPreview.show(url: url)
             } catch {
                 showError(error)
             }
