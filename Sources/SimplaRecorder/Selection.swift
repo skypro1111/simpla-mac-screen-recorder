@@ -1,6 +1,7 @@
 // Capture picker: full-screen overlays to pick a screen, window or area (phase 1),
 // then a small HUD to toggle audio sources and start recording (phase 2).
 import AppKit
+import Carbon.HIToolbox
 import CoreGraphics
 
 @MainActor
@@ -45,6 +46,8 @@ private final class PickerSession: NSObject {
     /// Phase 2 state: the chosen target and its frame in AppKit global coordinates.
     private var chosen: (target: CaptureTarget, frame: NSRect)?
     private var hud: HUDView?
+    /// Esc must cancel even before the overlay has keyboard focus (see EscapeHotKey).
+    private var escapeKey: EscapeHotKey?
     /// Overlay showing the HUD (phase 2).
     private weak var chosenWindow: OverlayWindow?
     /// Area rect (view coordinates) when a move via the HUD started.
@@ -66,6 +69,7 @@ private final class PickerSession: NSObject {
 
     func start() {
         NSApp.activate()
+        escapeKey = EscapeHotKey { [weak self] in self?.cancel() }
         windowList = Self.snapshotWindows()
         let mouse = NSEvent.mouseLocation
         for screen in NSScreen.screens {
@@ -85,6 +89,8 @@ private final class PickerSession: NSObject {
     func finish(_ result: CaptureChoice?) {
         guard let continuation else { return }
         self.continuation = nil
+        escapeKey?.invalidate()
+        escapeKey = nil
         let closing = overlays
         for window in closing { window.orderOut(nil); window.close() }
         overlays.removeAll()
@@ -365,6 +371,42 @@ private final class PickerSession: NSObject {
             }
         }
         return entries
+    }
+}
+
+// MARK: - Escape key
+
+/// System-wide Esc hot key, held only while the picker is open. A menu-bar app often isn't
+/// given keyboard focus when its overlay appears (e.g. over another app's full-screen space),
+/// so a normal keyDown would not arrive until the user clicks the overlay.
+@MainActor
+private final class EscapeHotKey {
+    private var hotKey: EventHotKeyRef?
+    private var handler: EventHandlerRef?
+    private let action: @MainActor () -> Void
+
+    init(action: @escaping @MainActor () -> Void) {
+        self.action = action
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetEventDispatcherTarget(), { _, _, userData in
+            guard let userData else { return noErr }
+            let key = Unmanaged<EscapeHotKey>.fromOpaque(userData).takeUnretainedValue()
+            DispatchQueue.main.async { MainActor.assumeIsolated { key.fire() } }
+            return noErr
+        }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
+        RegisterEventHotKey(UInt32(kVK_Escape), 0, EventHotKeyID(signature: OSType(0x53_52_45_43), id: 1),
+                            GetEventDispatcherTarget(), 0, &hotKey)
+    }
+
+    private func fire() {
+        if hotKey != nil { action() }
+    }
+
+    func invalidate() {
+        if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let handler { RemoveEventHandler(handler) }
+        hotKey = nil
+        handler = nil
     }
 }
 
