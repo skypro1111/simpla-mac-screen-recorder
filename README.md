@@ -8,7 +8,7 @@ Records a whole screen, a single window or a selected area — with system audio
 The menu-bar icon has four items: **Record Screen**, **Settings…**, **Open Recordings Folder** and **Quit**.
 
 1. **Record Screen** dims the screens. Click a window to pick it, press **Entire Screen**, or drag to select an area
-   (a dragged area can then be resized by its borders and moved by dragging the panel).
+   (a dragged area can then be resized by its borders or corners and moved by dragging inside it).
 2. A small panel lets you turn the microphone and system audio on or off for this recording, then start it.
 3. While recording, the menu-bar item becomes a red stop button with the elapsed time.
    Click it to stop.

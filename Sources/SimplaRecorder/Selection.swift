@@ -280,12 +280,14 @@ private final class PickerSession: NSObject {
             let view = window.overlay
             view.promptHidden = chosen != nil
             view.showSize = false
+            view.showHandles = false
             view.borderColor = .controlAccentColor
             if let chosen {
                 view.hole = local(chosen.frame, in: window)
                 if isAreaChosen {
                     view.borderColor = .white
                     view.showSize = true
+                    view.showHandles = true
                 }
             } else if let dragRect {
                 view.hole = view === dragView ? dragRect : nil
@@ -367,6 +369,8 @@ private final class OverlayView: NSView {
     var hole: NSRect?
     var borderColor: NSColor = .controlAccentColor
     var showSize = false
+    /// Draw corner handles (a dragged area that can still be resized).
+    var showHandles = false
     var promptHidden = false { didSet { prompt.isHidden = promptHidden } }
 
     private let prompt = NSStackView()
@@ -381,24 +385,48 @@ private final class OverlayView: NSView {
     }
     private var resize: (edges: Edges, origin: NSRect, start: NSPoint)?
 
+    /// Start point of a move (dragging anywhere inside the chosen area).
+    private var moveStart: NSPoint?
+
     /// Edges of the chosen area's border under `p` (empty when not on the border).
+    /// Corners have a larger grab zone than the straight edges.
     private func edges(at p: NSPoint) -> Edges {
-        let grab: CGFloat = 6
-        guard let hole, session?.isAreaChosen == true, hole.insetBy(dx: -grab, dy: -grab).contains(p) else { return [] }
-        var edges: Edges = []
-        if abs(p.x - hole.minX) <= grab { edges.insert(.left) } else if abs(p.x - hole.maxX) <= grab { edges.insert(.right) }
-        if abs(p.y - hole.minY) <= grab { edges.insert(.bottom) } else if abs(p.y - hole.maxY) <= grab { edges.insert(.top) }
-        return edges
+        let grab: CGFloat = 6, corner: CGFloat = 14
+        guard let hole, session?.isAreaChosen == true, hole.insetBy(dx: -corner, dy: -corner).contains(p) else { return [] }
+        let dLeft = abs(p.x - hole.minX), dRight = abs(p.x - hole.maxX)
+        let dBottom = abs(p.y - hole.minY), dTop = abs(p.y - hole.maxY)
+        if min(dLeft, dRight) <= corner, min(dBottom, dTop) <= corner {
+            return [dLeft <= dRight ? .left : .right, dBottom <= dTop ? .bottom : .top]
+        }
+        guard hole.insetBy(dx: -grab, dy: -grab).contains(p) else { return [] }
+        if dLeft <= grab { return .left }
+        if dRight <= grab { return .right }
+        if dBottom <= grab { return .bottom }
+        if dTop <= grab { return .top }
+        return []
     }
 
-    private func setCursor(for edges: Edges) {
-        let horizontal = !edges.isDisjoint(with: [.left, .right])
-        let vertical = !edges.isDisjoint(with: [.bottom, .top])
-        switch (horizontal, vertical) {
-        case (true, true): NSCursor.crosshair.set()
-        case (true, false): NSCursor.resizeLeftRight.set()
-        case (false, true): NSCursor.resizeUpDown.set()
-        default: NSCursor.arrow.set()
+    /// Resize cursor on the border, hand inside the area, arrow elsewhere.
+    private func setCursor(at p: NSPoint) {
+        let edges = edges(at: p)
+        var position: NSCursor.FrameResizePosition?
+        switch edges {
+        case [.left, .top]: position = .topLeft
+        case [.right, .top]: position = .topRight
+        case [.left, .bottom]: position = .bottomLeft
+        case [.right, .bottom]: position = .bottomRight
+        case .left: position = .left
+        case .right: position = .right
+        case .top: position = .top
+        case .bottom: position = .bottom
+        default: break
+        }
+        if let position {
+            NSCursor.frameResize(position: position, directions: .all).set()
+        } else if session?.isAreaChosen == true, hole?.contains(p) == true, hitTest(p) === self {
+            NSCursor.openHand.set()
+        } else {
+            NSCursor.arrow.set()
         }
     }
 
@@ -472,7 +500,7 @@ private final class OverlayView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         if session?.isAreaChosen == true {
-            if hole != nil { setCursor(for: edges(at: convert(event.locationInWindow, from: nil))) }
+            if hole != nil, resize == nil, moveStart == nil { setCursor(at: convert(event.locationInWindow, from: nil)) }
         } else {
             session?.updateHover()
         }
@@ -489,8 +517,13 @@ private final class OverlayView: NSView {
                 // Dragging the border of a dragged area resizes it.
                 resize = (grabbed, hole, p)
             } else if !(hole?.contains(p) ?? false) {
-                // Clicking the dimmed area goes back to phase 1; clicks inside the chosen region do nothing.
+                // Clicking the dimmed area goes back to phase 1.
                 session.reselect()
+            } else if session.isAreaChosen {
+                // Dragging anywhere inside a dragged area moves it.
+                moveStart = event.locationInWindow
+                session.moveBegan()
+                NSCursor.closedHand.set()
             }
             return
         }
@@ -510,6 +543,10 @@ private final class OverlayView: NSView {
             session?.setArea(NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
             return
         }
+        if let moveStart {
+            session?.moveChanged(dx: event.locationInWindow.x - moveStart.x, dy: event.locationInWindow.y - moveStart.y)
+            return
+        }
         guard let start = dragStart, let session else { return }
         let p = point(for: event)
         if !dragging && hypot(p.x - start.x, p.y - start.y) > 5 { dragging = true }
@@ -520,7 +557,13 @@ private final class OverlayView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if resize != nil { resize = nil; return }
+        if resize != nil || moveStart != nil {
+            resize = nil
+            if moveStart != nil { session?.moveEnded() }
+            moveStart = nil
+            setCursor(at: convert(event.locationInWindow, from: nil))
+            return
+        }
         guard let start = dragStart, let session else { return }
         dragStart = nil
         if dragging {
@@ -560,6 +603,19 @@ private final class OverlayView: NSView {
         let border = NSBezierPath(rect: rect.insetBy(dx: lineWidth / 2, dy: lineWidth / 2))
         border.lineWidth = lineWidth
         border.stroke()
+
+        if showHandles {
+            let r: CGFloat = 4
+            for corner in [NSPoint(x: hole.minX, y: hole.minY), NSPoint(x: hole.maxX, y: hole.minY),
+                           NSPoint(x: hole.minX, y: hole.maxY), NSPoint(x: hole.maxX, y: hole.maxY)] {
+                let dot = NSBezierPath(ovalIn: NSRect(x: corner.x - r, y: corner.y - r, width: 2 * r, height: 2 * r))
+                NSColor.white.setFill()
+                dot.fill()
+                NSColor.black.withAlphaComponent(0.5).setStroke()
+                dot.lineWidth = 1
+                dot.stroke()
+            }
+        }
 
         guard showSize else { return }
         // "W × H" label below the rect (or inside if there's no room).
