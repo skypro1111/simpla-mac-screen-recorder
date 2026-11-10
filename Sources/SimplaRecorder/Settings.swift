@@ -11,7 +11,7 @@ final class AppSettings: ObservableObject {
     private enum Key {
         static let format = "format", codec = "codec", fps = "fps", maxHeight = "maxHeight"
         static let systemAudio = "captureSystemAudio", microphone = "captureMicrophone"
-        static let outputDirectory = "outputDirectory"
+        static let outputDirectory = "outputDirectory", saveWhileRecording = "saveWhileRecording"
     }
 
     static let defaultOutputDirectory = FileManager.default
@@ -25,6 +25,7 @@ final class AppSettings: ObservableObject {
     @Published var maxHeight: Int { didSet { defaults.set(maxHeight, forKey: Key.maxHeight) } }
     @Published var captureSystemAudio: Bool { didSet { defaults.set(captureSystemAudio, forKey: Key.systemAudio) } }
     @Published var captureMicrophone: Bool { didSet { defaults.set(captureMicrophone, forKey: Key.microphone) } }
+    @Published var saveWhileRecording: Bool { didSet { defaults.set(saveWhileRecording, forKey: Key.saveWhileRecording) } }
     @Published var outputDirectory: URL { didSet { defaults.set(outputDirectory.path, forKey: Key.outputDirectory) } }
 
     private init() {
@@ -34,6 +35,7 @@ final class AppSettings: ObservableObject {
             Key.fps: 30,
             Key.systemAudio: true,
             Key.microphone: false,
+            Key.saveWhileRecording: true,
         ])
         format = VideoFormat(rawValue: defaults.string(forKey: Key.format) ?? "") ?? .mp4
         codec = VideoCodec(rawValue: defaults.string(forKey: Key.codec) ?? "") ?? .h264
@@ -42,6 +44,7 @@ final class AppSettings: ObservableObject {
         maxHeight = max(0, defaults.integer(forKey: Key.maxHeight))
         captureSystemAudio = defaults.bool(forKey: Key.systemAudio)
         captureMicrophone = defaults.bool(forKey: Key.microphone)
+        saveWhileRecording = defaults.bool(forKey: Key.saveWhileRecording)
         if let path = defaults.string(forKey: Key.outputDirectory), !path.isEmpty {
             outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
         } else {
@@ -53,6 +56,7 @@ final class AppSettings: ObservableObject {
         RecordingOptions(format: format, codec: codec, fps: fps, maxHeight: maxHeight,
                          captureSystemAudio: captureSystemAudio,
                          captureMicrophone: captureMicrophone,
+                         saveWhileRecording: saveWhileRecording,
                          outputDirectory: outputDirectory)
     }
 }
@@ -88,6 +92,8 @@ struct SettingsView: View {
             }
             Toggle("Record microphone by default", isOn: $settings.captureMicrophone)
             Toggle("Record system audio by default", isOn: $settings.captureSystemAudio)
+            Toggle("Save to disk while recording", isOn: $settings.saveWhileRecording)
+                .help("Writes the recording to disk every 5 seconds, so a crash keeps what was recorded so far.")
             Toggle("Start at login", isOn: Binding(get: { startAtLogin }, set: setStartAtLogin))
             if let loginItemError {
                 Text(loginItemError).font(.caption).foregroundStyle(.red)

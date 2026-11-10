@@ -33,6 +33,8 @@ struct RecordingOptions {
     var maxHeight: Int
     var captureSystemAudio: Bool
     var captureMicrophone: Bool
+    /// Flush the file to disk every few seconds, so a crash keeps what was recorded so far.
+    var saveWhileRecording: Bool
     var outputDirectory: URL
 }
 

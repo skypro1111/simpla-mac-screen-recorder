@@ -115,7 +115,8 @@ final class Recorder: NSObject, ObservableObject {
 
         let writer = try StreamWriter(url: url, fileType: fileType, codec: options.codec,
                                       width: config.width, height: config.height, fps: max(1, options.fps),
-                                      systemAudio: options.captureSystemAudio, microphone: options.captureMicrophone)
+                                      systemAudio: options.captureSystemAudio, microphone: options.captureMicrophone,
+                                      saveWhileRecording: options.saveWhileRecording)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         do {
             try stream.addStreamOutput(writer, type: .screen, sampleHandlerQueue: writer.queue)
@@ -322,11 +323,13 @@ private final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable 
     private var lastFrame: CMSampleBuffer?
 
     init(url: URL, fileType: AVFileType, codec: VideoCodec, width: Int, height: Int, fps: Int,
-         systemAudio: Bool, microphone: Bool) throws {
+         systemAudio: Bool, microphone: Bool, saveWhileRecording: Bool) throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
         // Flush the recording to disk in fragments, so a crash or power loss costs at most
         // the last few seconds instead of leaving an unplayable file.
-        writer.movieFragmentInterval = CMTime(seconds: 5, preferredTimescale: 600)
+        if saveWhileRecording {
+            writer.movieFragmentInterval = CMTime(seconds: 5, preferredTimescale: 600)
+        }
         self.writer = writer
 
         // Screen content compresses well; HEVC needs roughly 60% of the H.264 bitrate.

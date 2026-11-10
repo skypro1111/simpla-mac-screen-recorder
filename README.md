@@ -30,8 +30,8 @@ The menu-bar icon has four items: **Record Screen**, **Settings…**, **Open Rec
 4. A small preview appears in the bottom-left corner for 5 seconds. Hover it for **Save** (show in Finder),
    **Copy** (put the video on the clipboard) or **Delete** (move to Trash); otherwise it fades out and the file stays saved.
 
-The recording is flushed to disk every 5 seconds while it runs, so if the app or the Mac crashes,
-the file in the output folder is still playable up to the last flush.
+By default the recording is flushed to disk every 5 seconds while it runs, so if the app or the Mac crashes,
+the file in the output folder is still playable up to the last flush (**Save to disk while recording** in Settings).
 
 ## Build
 
