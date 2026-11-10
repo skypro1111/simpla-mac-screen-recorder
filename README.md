@@ -1,7 +1,22 @@
+<p align="center"><img src="assets/icon.png" width="128" alt="Simpla Recorder icon"></p>
+
 # Simpla Recorder
 
 A tiny menu-bar screen recorder for macOS 15+.
 Records a whole screen, a single window or a selected area — with system audio and/or microphone — to MP4 or MOV (H.264 / HEVC).
+
+## Install
+
+Requires macOS 15 or later on an Apple Silicon Mac.
+
+1. Download `SimplaRecorder.zip` from the [latest release](../../releases/latest) and unzip it.
+2. Move **Simpla Recorder.app** to the **Applications** folder.
+3. The app is not notarized by Apple, so macOS blocks the first launch. Either:
+   - open it once, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**; or
+   - run this in Terminal: `xattr -dr com.apple.quarantine "/Applications/Simpla Recorder.app"`
+4. Launch it. There is no Dock icon — look for the camera icon in the menu bar.
+5. On the first recording macOS asks for **Screen & System Audio Recording** access (and for the microphone,
+   if you enable it). Allow it in System Settings → Privacy & Security, then quit and reopen the app.
 
 ## Usage
 
@@ -20,12 +35,13 @@ The menu-bar icon has four items: **Record Screen**, **Settings…**, **Open Rec
 Only the Command Line Tools are required (no Xcode).
 
 ```sh
-./build.sh        # build and sign ~/Applications/Simpla Recorder.app
-./build.sh run    # build and launch
+./build.sh           # build and install /Applications/Simpla Recorder.app
+./build.sh run       # same, then launch it
+./build.sh release   # build an ad-hoc signed SimplaRecorder.zip for distribution
 ```
 
 Build products go to `~/Library/Caches/SimplaRecorder-build`, not the project folder.
-Signing uses `CODESIGN_IDENTITY`, else the first code-signing certificate in the keychain, else ad-hoc.
+Local builds are signed with `CODESIGN_IDENTITY`, else the first code-signing certificate in the keychain, else ad-hoc.
 
 ## Permissions
 
