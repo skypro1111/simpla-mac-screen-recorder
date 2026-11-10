@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.target = self
+        statusItem.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         menu.delegate = self
 
         // `$state` emits in willSet, so use the delivered value rather than reading `state`.
@@ -55,55 +56,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Status item
 
-    /// Idle: camera icon that opens the menu. Recording: the item itself is a red stop
-    /// button with the elapsed time; one click stops the recording (no menu).
+    /// Idle (and while a file is being finalized): camera icon that opens the menu.
+    /// Recording: the item itself is a stop button with the elapsed time; one click stops
+    /// the recording (no menu). Everything is drawn in the menu bar's own colour.
     private func updateStatusItem(for state: Recorder.State) {
         guard let button = statusItem.button else { return }
         timer?.invalidate()
         timer = nil
 
         switch state {
-        case .idle:
+        case .idle, .finishing:
             button.image = statusIcon()
-            button.attributedTitle = NSAttributedString()
+            button.title = ""
             button.toolTip = "Simpla Recorder"
             button.action = nil
             statusItem.menu = menu
         case .recording(let since):
-            button.image = Self.symbol("stop.circle.fill", color: .systemRed)
-            button.attributedTitle = Self.label(Self.elapsed(since: since), color: .systemRed)
+            let stop = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop Recording")?
+                .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
+            stop?.isTemplate = true
+            button.image = stop
+            button.title = " " + Self.elapsed(since: since)
             button.toolTip = "Stop Recording"
             statusItem.menu = nil
             button.action = #selector(stopRecording)
             timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.statusItem.button?.attributedTitle = Self.label(Self.elapsed(since: since), color: .systemRed)
+                    self?.statusItem.button?.title = " " + Self.elapsed(since: since)
                 }
             }
-        case .finishing:
-            button.image = Self.symbol("arrow.down.circle.fill", color: .systemOrange)
-            button.attributedTitle = Self.label("Saving…", color: .systemOrange)
-            button.toolTip = "Saving…"
-            statusItem.menu = nil
-            button.action = nil
         }
-    }
-
-    /// Explicitly coloured (non-template) symbol — white glyph on a coloured disc — so it
-    /// stays visible on any menu bar.
-    private static func symbol(_ name: String, color: NSColor) -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-            .applying(.init(paletteColors: [.white, color]))
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
-        image?.isTemplate = false
-        return image
-    }
-
-    private static func label(_ text: String, color: NSColor) -> NSAttributedString {
-        NSAttributedString(string: " " + text, attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium),
-            .foregroundColor: color,
-        ])
     }
 
     /// Bundled camera glyph as a template image, so it follows the menu bar colour.
@@ -142,7 +124,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func recordScreen() {
-        guard !isPicking else { return }
+        // Ignored while a previous recording is still being saved.
+        guard !isPicking, recorder.state == .idle else { return }
         isPicking = true
         Task { @MainActor in
             defer { isPicking = false }
