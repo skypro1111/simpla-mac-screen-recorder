@@ -24,9 +24,10 @@ enum RecorderError: LocalizedError {
     }
 }
 
-/// Records the screen via SCStream + SCRecordingOutput (macOS 15+), which writes
-/// video, system audio and microphone into one file. When both audio sources are
-/// present the file has two audio tracks, so a post-stop pass mixes them into one.
+/// Records the screen via SCStream sample buffers written with AVAssetWriter.
+/// (SCRecordingOutput would be less code, but it makes macOS add its own stop button
+/// to the menu bar next to ours.) When both audio sources are present the file has
+/// two audio tracks, so a post-stop pass mixes them into one.
 @MainActor
 final class Recorder: NSObject, ObservableObject {
     static let shared = Recorder()
@@ -40,15 +41,9 @@ final class Recorder: NSObject, ObservableObject {
 
     private var isStarting = false
     private var stream: SCStream?
-    private var recordingOutput: SCRecordingOutput?
+    private var writer: StreamWriter?
     private var outputURL: URL?
     private var fileType: AVFileType = .mp4
-
-    // Completion of SCRecordingOutput (finish or failure).
-    private var recordingDone = false
-    private var recordingError: Error?
-    private var doneContinuation: CheckedContinuation<Void, Never>?
-    private var generation = 0
 
     func start(target: CaptureTarget, options: RecordingOptions) async throws {
         guard state == .idle, !isStarting else { throw RecorderError.alreadyRunning }
@@ -110,25 +105,25 @@ final class Recorder: NSObject, ObservableObject {
             .appendingPathExtension(options.format.fileExtension)
         let fileType: AVFileType = options.format == .mov ? .mov : .mp4
 
-        let recordingConfig = SCRecordingOutputConfiguration()
-        recordingConfig.outputURL = url
-        recordingConfig.outputFileType = fileType
-        recordingConfig.videoCodecType = options.codec == .hevc ? .hevc : .h264
-        let output = SCRecordingOutput(configuration: recordingConfig, delegate: self)
-
+        let writer = try StreamWriter(url: url, fileType: fileType, codec: options.codec,
+                                      width: config.width, height: config.height, fps: max(1, options.fps),
+                                      systemAudio: options.captureSystemAudio, microphone: options.captureMicrophone)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        try stream.addRecordingOutput(output)
-
-        generation += 1
-        recordingDone = false
-        recordingError = nil
-        self.stream = stream
-        self.recordingOutput = output
-        self.outputURL = url
-        self.fileType = fileType
         do {
+            try stream.addStreamOutput(writer, type: .screen, sampleHandlerQueue: writer.queue)
+            if options.captureSystemAudio {
+                try stream.addStreamOutput(writer, type: .audio, sampleHandlerQueue: writer.queue)
+            }
+            if options.captureMicrophone {
+                try stream.addStreamOutput(writer, type: .microphone, sampleHandlerQueue: writer.queue)
+            }
+            self.stream = stream
+            self.writer = writer
+            self.outputURL = url
+            self.fileType = fileType
             try await stream.startCapture()
         } catch {
+            writer.cancel()
             reset()
             throw error
         }
@@ -137,7 +132,9 @@ final class Recorder: NSObject, ObservableObject {
 
     /// Stops and returns the final file URL.
     @discardableResult func stop() async throws -> URL {
-        guard case .recording = state, let stream, let url = outputURL else { throw RecorderError.notRecording }
+        guard case .recording = state, let stream, let writer, let url = outputURL else {
+            throw RecorderError.notRecording
+        }
         state = .finishing
         defer { reset() }
         do {
@@ -145,59 +142,31 @@ final class Recorder: NSObject, ObservableObject {
         } catch {
             // The stream may already be dead; still try to finalize whatever was written.
         }
-        return try await finalize(url: url)
+        return try await finalize(url: url, writer: writer)
     }
 
     // MARK: - Private
 
-    /// Waits for SCRecordingOutput to close the file and mixes audio tracks if needed.
-    private func finalize(url: URL) async throws -> URL {
-        await waitForRecordingDone()
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw recordingError ?? RecorderError.recordingFailed(nil)
-        }
+    /// Closes the file and mixes audio tracks if needed.
+    private func finalize(url: URL, writer: StreamWriter) async throws -> URL {
+        try await writer.finish()
         // Mixing failure is not fatal: the original file (with separate tracks) is kept.
         try? await Self.mixAudioTracks(at: url, fileType: fileType)
         return url
     }
 
-    private func waitForRecordingDone() async {
-        if recordingDone { return }
-        // Safety net in case the delegate never reports completion.
-        let current = generation
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard let self, self.generation == current else { return }
-            self.markRecordingDone(error: nil)
-        }
-        await withCheckedContinuation { doneContinuation = $0 }
-    }
-
-    private func recordingOutputDone(_ outputID: ObjectIdentifier, error: Error?) {
-        guard let recordingOutput, ObjectIdentifier(recordingOutput) == outputID else { return }
-        markRecordingDone(error: error)
-    }
-
-    private func markRecordingDone(error: Error?) {
-        guard !recordingDone else { return }
-        recordingDone = true
-        recordingError = error
-        doneContinuation?.resume()
-        doneContinuation = nil
-    }
-
     private func reset() {
         stream = nil
-        recordingOutput = nil
+        writer = nil
         outputURL = nil
         state = .idle
     }
 
     private func handleUnexpectedStop(streamID: ObjectIdentifier, error: Error) async {
         guard case .recording = state, let stream, ObjectIdentifier(stream) == streamID,
-              let url = outputURL else { return }
+              let writer, let url = outputURL else { return }
         state = .finishing
-        let savedURL = try? await finalize(url: url)
+        let savedURL = try? await finalize(url: url, writer: writer)
         reset()
         onUnexpectedStop?(savedURL, error)
     }
@@ -328,16 +297,113 @@ extension Recorder: SCStreamDelegate {
     }
 }
 
-// MARK: - SCRecordingOutputDelegate
+// MARK: - Sample writer
 
-extension Recorder: SCRecordingOutputDelegate {
-    nonisolated func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) {
-        let outputID = ObjectIdentifier(recordingOutput)
-        Task { @MainActor in self.recordingOutputDone(outputID, error: error) }
+/// Receives the stream's sample buffers and writes them to the file. All state is
+/// touched only on `queue` (also the stream's sample handler queue), hence @unchecked Sendable.
+private final class StreamWriter: NSObject, SCStreamOutput, @unchecked Sendable {
+    let queue = DispatchQueue(label: "Recorder.samples")
+
+    private let writer: AVAssetWriter
+    private let video: AVAssetWriterInput
+    private let audio: AVAssetWriterInput?
+    private let microphone: AVAssetWriterInput?
+    private var started = false
+    private var finished = false
+
+    init(url: URL, fileType: AVFileType, codec: VideoCodec, width: Int, height: Int, fps: Int,
+         systemAudio: Bool, microphone: Bool) throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
+        self.writer = writer
+
+        // Screen content compresses well; HEVC needs roughly 60% of the H.264 bitrate.
+        let bitrate = max(2_000_000, Int(Double(width * height * fps) * (codec == .hevc ? 0.06 : 0.1)))
+        let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: codec == .hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: bitrate,
+                AVVideoExpectedSourceFrameRateKey: fps,
+                AVVideoMaxKeyFrameIntervalDurationKey: 2,
+            ],
+        ])
+        video.expectsMediaDataInRealTime = true
+        writer.add(video)
+        self.video = video
+
+        func audioInput() -> AVAssetWriterInput {
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 48_000,
+                AVNumberOfChannelsKey: 2,
+                AVEncoderBitRateKey: 160_000,
+            ])
+            input.expectsMediaDataInRealTime = true
+            writer.add(input)
+            return input
+        }
+        audio = systemAudio ? audioInput() : nil
+        self.microphone = microphone ? audioInput() : nil
+
+        super.init()
+        guard writer.startWriting() else { throw writer.error ?? RecorderError.recordingFailed(nil) }
     }
 
-    nonisolated func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
-        let outputID = ObjectIdentifier(recordingOutput)
-        Task { @MainActor in self.recordingOutputDone(outputID, error: nil) }
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard !finished, sampleBuffer.isValid, writer.status == .writing else { return }
+        switch type {
+        case .screen:
+            // Skip idle/blank frames that carry no image.
+            guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+                    as? [[SCStreamFrameInfo: Any]],
+                  let status = attachments.first?[.status] as? Int,
+                  SCFrameStatus(rawValue: status) == .complete else { return }
+            if !started {
+                // The file's timeline starts at the first video frame.
+                writer.startSession(atSourceTime: sampleBuffer.presentationTimeStamp)
+                started = true
+            }
+            if video.isReadyForMoreMediaData { video.append(sampleBuffer) }
+        case .audio:
+            if started, let audio, audio.isReadyForMoreMediaData { audio.append(sampleBuffer) }
+        case .microphone:
+            if started, let microphone, microphone.isReadyForMoreMediaData { microphone.append(sampleBuffer) }
+        @unknown default:
+            break
+        }
+    }
+
+    /// Finishes the file. Throws if nothing was captured or writing failed.
+    func finish() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                self.finished = true
+                guard self.started, self.writer.status == .writing else {
+                    let error = self.writer.error
+                    self.writer.cancelWriting()
+                    continuation.resume(throwing: error ?? RecorderError.recordingFailed("No frames were captured."))
+                    return
+                }
+                // A static screen produces no new frames; extend the last one to the real end time.
+                self.writer.endSession(atSourceTime: CMClockGetTime(CMClockGetHostTimeClock()))
+                for input in [self.video, self.audio, self.microphone] { input?.markAsFinished() }
+                self.writer.finishWriting {
+                    if self.writer.status == .completed {
+                        continuation.resume()
+                    } else {
+                        continuation.resume(throwing: self.writer.error ?? RecorderError.recordingFailed(nil))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Abandons the file (capture never started).
+    func cancel() {
+        queue.async {
+            self.finished = true
+            self.writer.cancelWriting()
+        }
     }
 }
