@@ -323,36 +323,46 @@ private final class PickerSession: NSObject {
                 as? [[String: Any]] else { return [] }
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        var entries: [WindowEntry] = infos.compactMap { info in
+
+        // Every normal-layer window of other apps, including tiny and invisible helper windows.
+        let raw: [(id: CGWindowID, pid: pid_t, frame: NSRect, visible: Bool)] = infos.compactMap { info in
             guard (info[kCGWindowLayer as String] as? Int) == 0,
                   let id = info[kCGWindowNumber as String] as? CGWindowID,
                   let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
-                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
-                  let b = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-                  b.width >= 60, b.height >= 60
+                  let b = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
             else { return nil }
-            return (id, pid, NSRect(x: b.minX, y: primaryHeight - b.maxY, width: b.width, height: b.height), nil)
+            let visible = (info[kCGWindowAlpha as String] as? Double ?? 1) > 0
+            return (id, pid, NSRect(x: b.minX, y: primaryHeight - b.maxY, width: b.width, height: b.height), visible)
         }
+        // Pickable windows: visible and not tiny.
+        var entries: [WindowEntry] = raw.filter { $0.visible && $0.frame.width >= 60 && $0.frame.height >= 60 }
+            .map { ($0.id, $0.pid, $0.frame, nil) }
 
-        // Full-screen windows: treat the window as its whole screen and drop the app's helper
-        // windows on it (e.g. the separate toolbar strip), so the screen is one zone, not two.
-        for index in entries.indices {
-            let frame = entries[index].frame
-            guard let screen = NSScreen.screens.first(where: { screen in
-                // The window must cover the screen completely (on a notched display: everything
-                // below the notch). A merely maximized window stops at the menu bar and doesn't count.
-                var usable = screen.frame
-                usable.size.height -= screen.safeAreaInsets.top
-                return frame.insetBy(dx: -1, dy: -1).contains(usable)
-            }), let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            else { continue }
-            entries[index].frame = screen.frame
-            entries[index].display = CGDirectDisplayID(number.uint32Value)
-        }
-        let fullScreen = entries.filter { $0.display != nil }
-        entries.removeAll { entry in
-            entry.display == nil && fullScreen.contains { $0.pid == entry.pid && $0.frame.contains(entry.frame) }
+        // A full-screen app is made of several stacked full-width windows (content, toolbar/tab strip).
+        // When one app's full-width windows together cover a whole screen, offer that screen as a
+        // single zone instead of one zone per window.
+        for screen in NSScreen.screens {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
+            // On a notched display full-screen windows start below the notch.
+            var usable = screen.frame
+            usable.size.height -= screen.safeAreaInsets.top
+            let onScreen = raw.filter { screen.frame.insetBy(dx: -1, dy: -1).contains($0.frame) }
+            for pid in Set(onScreen.map(\.pid)) {
+                let wide = onScreen.filter {
+                    $0.pid == pid && $0.frame.minX <= screen.frame.minX + 1 && $0.frame.maxX >= screen.frame.maxX - 1
+                }
+                guard let largest = wide.max(by: { $0.frame.height < $1.frame.height }),
+                      wide.reduce(NSRect.null, { $0.union($1.frame) }).insetBy(dx: -1, dy: -1).contains(usable)
+                else { continue }
+                let isPart: (WindowEntry) -> Bool = { entry in
+                    entry.pid == pid && entry.display == nil && screen.frame.insetBy(dx: -1, dy: -1).contains(entry.frame)
+                }
+                let position = entries.firstIndex(where: isPart) ?? entries.count
+                let before = entries[..<position].filter { !isPart($0) }.count
+                entries.removeAll(where: isPart)
+                entries.insert((largest.id, pid, screen.frame, CGDirectDisplayID(number.uint32Value)), at: before)
+            }
         }
         return entries
     }
